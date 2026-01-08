@@ -1,78 +1,62 @@
-package service
+package services
 
 import (
-	"errors"
-
-	"github.com/foundlab/spezzatura-lite/internal/artifacts"
-	"github.com/foundlab/spezzatura-lite/internal/core"
-	"github.com/foundlab/spezzatura-lite/internal/rules"
+	"context"
+	"spezzaturalitev1/internal/core"
+	"spezzaturalitev1/internal/rules"
 )
 
-// EvaluationResult is the composed, non-advisory output of the orchestrator.
-type EvaluationResult struct {
-	CoreResult   core.Result           `json:"core_result"`
-	Findings     []rules.Finding       `json:"findings"`
-	Proof        artifacts.ProofOfCheck `json:"proof_of_check"`
+type Orchestrator struct {
+	engine *core.TrustEngine
 }
 
-// EngineDescriptor identifies the executing engine for audit.
-var EngineDescriptor = artifacts.EngineDescriptor{
-	Name:    "spezzatura-lite-orchestrator",
-	Version: "v1.0.0",
+func NewOrchestrator() *Orchestrator {
+	return &Orchestrator{
+		engine: core.NewTrustEngine(),
+	}
 }
 
-// Evaluate orchestrates core evaluation, rules, scoring, and proof emission.
-func Evaluate(input core.Input, ruleInput rules.Input) (EvaluationResult, error) {
-	// 1) Core deterministic evaluation (canonical hash + base score)
-	coreRes, err := core.Evaluate(input)
+// ProcessVerification executa o fluxo completo de Due Diligence.
+// Recebe dados brutos, processa e retorna APENAS o score e o artefato.
+func (o *Orchestrator) ProcessVerification(ctx context.Context, capTableData rules.CapTableInput) (float64, string, error) {
+	
+	// --- ZERO-PERSISTENCE PROTOCOL ---
+	// Garante que os dados de entrada sejam limpos da referência ao sair da função.
+	defer func() {
+		// Em Go, setar para nil ajuda o GC, mas para dados ultra-críticos 
+		// usaríamos bibliotecas de memguard. Para este estágio, nil é suficiente.
+		capTableData.DeclaredEquity = nil 
+	}()
+
+	// 1. Coleta de Sinais Soberanos (Mock do BigQuery por enquanto)
+	// Na produção, isso chamaria o cliente BigQuery.
+	sovereignSignals := rules.SovereignData{
+		DetectedTechnicalContributors: 2, // Ex: Achamos 2 devs ativos
+		CorporateRegistryFounders:     2,
+	}
+
+	// 2. Execução das Regras (Componente Histórico T^2)
+	integrityScore, err := rules.EvaluateCapTableConsistency(ctx, capTableData, sovereignSignals)
 	if err != nil {
-		return EvaluationResult{}, err
+		return 0, "", err
 	}
 
-	// 2) Rules evaluation (versioned rulepack)
-	rp := rules.DefaultRulePack()
-	findings, err := rp.Evaluate(ruleInput)
-	if err != nil {
-		return EvaluationResult{}, err
-	}
+	// 3. Avaliação de Risco Reativo P(x) (Simulação)
+	// Aqui entraríamos com chamadas de OSINT / Google Search para red flags.
+	// Vamos simular um risco baixo (0.1)
+	currentRisk := 0.1 
 
-	// 3) Aggregate signals and invariants
-	signals := []string{}
-	invariants := map[string]bool{
-		"non_empty_match": coreRes.FailureMode == nil,
-	}
+	// 4. Fusão Matemática (Engine)
+	finalTrustScore := o.engine.CalculateTrustScore(integrityScore, currentRisk)
 
-	for _, f := range findings {
-		signals = append(signals, f.Signals...)
-		if !f.Passed {
-			invariants["rules_all_passed"] = false
-		}
-	}
-	if _, ok := invariants["rules_all_passed"]; !ok {
-		invariants["rules_all_passed"] = true
-	}
+	// 5. Geração de Artefato Imutável
+	// Geramos um Hash SHA-256 do resultado + timestamp (simulado aqui)
+	artifactID := "art_v1_" + generateHash(finalTrustScore)
 
-	// 4) Fail-closed if core already failed
-	if coreRes.FailureMode != nil {
-		return EvaluationResult{}, errors.New("core evaluation failed; proof not emitted")
-	}
+	return finalTrustScore, artifactID, nil
+}
 
-	// 5) Emit proof-of-check artifact
-	proof, err := artifacts.NewProof(
-		coreRes.CorrelationID,
-		coreRes.InputHash,
-		coreRes.TrustScore,
-		signals,
-		invariants,
-		EngineDescriptor,
-	)
-	if err != nil {
-		return EvaluationResult{}, err
-	}
-
-	return EvaluationResult{
-		CoreResult: coreRes,
-		Findings:   findings,
-		Proof:      proof,
-	}, nil
+func generateHash(score float64) string {
+	// Implementação simples para exemplo. Usar crypto/sha256 na real.
+	return fmt.Sprintf("%x", score) // Hex representation
 }
