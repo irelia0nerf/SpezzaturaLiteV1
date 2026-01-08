@@ -2,80 +2,36 @@ package core
 
 import (
 	"testing"
-	"time"
+	"math"
 )
 
-func TestEvaluate_DeterministicSameInputDifferentOrder(t *testing.T) {
-	asOf := time.Date(2026, 1, 8, 12, 0, 0, 0, time.UTC)
+func TestSigmoidGate_PoisonPill(t *testing.T) {
+	engine := NewTrustEngine()
 
-	in1 := Input{
-		CorrelationID: "dec_001",
-		AsOfUTC:       asOf,
-		Claims: []Claim{
-			{Namespace: "cap_table", Key: "founders", Value: "3"},
-			{Namespace: "corp", Key: "cnpj", Value: "40.822.202/0001-33"},
-		},
-		References: []Reference{
-			{Namespace: "corp", Key: "cnpj", Value: "40.822.202/0001-33", Source: "registry"},
-			{Namespace: "cap_table", Key: "founders", Value: "2", Source: "filing"},
-			{Namespace: "cap_table", Key: "founders", Value: "3", Source: "filing"},
-		},
+	// Cenário 1: Startup Perfeita (Histórico Alto, Risco Baixo)
+	// T^2 = 9.5, P(x) = 0.1
+	scoreSafe := engine.CalculateTrustScore(9.5, 0.1)
+	if scoreSafe < 8.0 {
+		t.Errorf("Falha no Cenário Nominal: Esperado > 8.0, Recebido %f", scoreSafe)
 	}
 
-	// Same data, different order
-	in2 := Input{
-		CorrelationID: "dec_001",
-		AsOfUTC:       asOf,
-		Claims: []Claim{
-			{Namespace: "corp", Key: "cnpj", Value: "40.822.202/0001-33"},
-			{Namespace: "cap_table", Key: "founders", Value: "3"},
-		},
-		References: []Reference{
-			{Namespace: "cap_table", Key: "founders", Value: "3", Source: "filing"},
-			{Namespace: "cap_table", Key: "founders", Value: "2", Source: "filing"},
-			{Namespace: "corp", Key: "cnpj", Value: "40.822.202/0001-33", Source: "registry"},
-		},
-	}
-
-	r1, err1 := Evaluate(in1)
-	r2, err2 := Evaluate(in2)
-
-	if err1 != nil || err2 != nil {
-		t.Fatalf("expected no errors, got err1=%v err2=%v", err1, err2)
-	}
-	if r1.InputHash != r2.InputHash {
-		t.Fatalf("expected same InputHash, got %s vs %s", r1.InputHash, r2.InputHash)
-	}
-	if r1.TrustScore != r2.TrustScore {
-		t.Fatalf("expected same TrustScore, got %d vs %d", r1.TrustScore, r2.TrustScore)
-	}
-	if len(r1.Inconsistencies) != len(r2.Inconsistencies) {
-		t.Fatalf("expected same inconsistency count, got %d vs %d", len(r1.Inconsistencies), len(r2.Inconsistencies))
+	// Cenário 2: Ataque "One Strike" (Histórico Perfeito, Risco Crítico)
+	// A startup tem métricas ótimas (9.5), mas foi detectada uma fraude ativa (0.9)
+	scoreRisky := engine.CalculateTrustScore(9.5, 0.9)
+	
+	// A Poison Pill deve derrubar a nota para perto de zero, ignorando o 9.5
+	if scoreRisky > 2.0 {
+		t.Errorf("FALHA DE SEGURANÇA: Poison Pill não ativou. Risco Alto (0.9) gerou score %f", scoreRisky)
 	}
 }
 
-func TestEvaluate_FailClosed_MissingCorrelationID(t *testing.T) {
-	asOf := time.Date(2026, 1, 8, 12, 0, 0, 0, time.UTC)
-	_, err := Evaluate(Input{
-		CorrelationID: "",
-		AsOfUTC:       asOf,
-		Claims:        []Claim{{Namespace: "x", Key: "y", Value: "z"}},
-		References:    []Reference{{Namespace: "x", Key: "y", Value: "z", Source: "s"}},
-	})
-	if err == nil {
-		t.Fatalf("expected error for missing correlation_id")
-	}
-}
-
-func TestEvaluate_FailClosed_ZeroMatchesInvariant(t *testing.T) {
-	asOf := time.Date(2026, 1, 8, 12, 0, 0, 0, time.UTC)
-	_, err := Evaluate(Input{
-		CorrelationID: "dec_002",
-		AsOfUTC:       asOf,
-		Claims:        []Claim{{Namespace: "corp", Key: "cnpj", Value: "AAA"}},
-		References:    []Reference{{Namespace: "corp", Key: "cnpj", Value: "BBB", Source: "registry"}},
-	})
-	if err == nil {
-		t.Fatalf("expected invariant breach error")
+func TestSigmoidGate_Sensitivity(t *testing.T) {
+	engine := NewTrustEngine()
+	
+	// Testando o ponto de corte (Threshold ~0.75)
+	// Risco 0.76 deve penalizar severamente
+	val := engine.sigmoidGate(0.76)
+	if val > 0.5 {
+		t.Errorf("Sensibilidade insuficiente: Gate em 0.76 deveria fechar, retornou %f", val)
 	}
 }
