@@ -1,0 +1,23 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Spezzatura Lite API",
+    "version": "v1",
+    "description": "Read-only, non-advisory Consistency-as-a-Service API"
+  },
+  "paths": {
+    "/evaluate": {
+      "post": {
+        "summary": "Evaluate consistency",
+        "responses": {
+          "200": {
+            "description": "Evaluation result"
+          },
+          "422": {
+            "description": "Unprocessable input"
+          }
+        }
+      }
+    }
+  }
+}
