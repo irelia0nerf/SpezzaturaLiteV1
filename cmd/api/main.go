@@ -6,116 +6,106 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/foundlab/spezzatura-lite/internal/core"
-	"github.com/foundlab/spezzatura-lite/internal/rules"
-	"github.com/foundlab/spezzatura-lite/internal/service"
+	"spezzaturalitev1/internal/rules"
+	"spezzaturalitev1/internal/services"
 )
 
-type EvaluateRequest struct {
-	CorrelationID string            `json:"correlation_id"`
-	AsOfUTC       time.Time         `json:"as_of_utc"`
-	Claims        map[string]string `json:"claims"`
-	References    map[string][]struct {
-		Value  string `json:"value"`
-		Source string `json:"source"`
-	} `json:"references"`
+// Server define a estrutura da API
+type Server struct {
+	orchestrator *services.Orchestrator
 }
 
-type EvaluateResponse struct {
-	Result service.EvaluationResult `json:"result"`
+func NewServer() *Server {
+	return &Server{
+		orchestrator: services.NewOrchestrator(),
+	}
+}
+
+// VerificationRequest define o contrato de entrada JSON
+type VerificationRequest struct {
+	DeclaredFounders int       `json:"declared_founders"`
+	DeclaredEquity   []float64 `json:"declared_equity"`
+	CompanyID        string    `json:"company_id"` // Hash ou ID anônimo
+}
+
+// VerificationResponse define o contrato de saída (apenas Sinais)
+type VerificationResponse struct {
+	ArtifactID string  `json:"artifact_id"`
+	TrustScore float64 `json:"trust_score"`
+	Timestamp  string  `json:"timestamp"`
+	Status     string  `json:"status"` // BLOCK, REVIEW, ALLOW
+}
+
+func (s *Server) HandleVerify(w http.ResponseWriter, r *http.Request) {
+	// 1. Sanitização de Entrada
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req VerificationRequest
+	// Decode stream evita carregar tudo na RAM se o payload for gigante (ataque DoS)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Mapeamento para Estrutura Interna (Stateless)
+	input := rules.CapTableInput{
+		DeclaredFounders: req.DeclaredFounders,
+		DeclaredEquity:   req.DeclaredEquity,
+	}
+
+	// 3. Execução do Orquestrador
+	// Contexto com timeout para garantir SLA de resposta rápida
+	ctx := r.Context()
+	
+	score, artifactID, err := s.orchestrator.ProcessVerification(ctx, input)
+	if err != nil {
+		// Log genérico de erro, SEM dados do cliente
+		log.Printf("Verification error for ID %s: %v", req.CompanyID, err)
+		http.Error(w, "Verification failed", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Definição do Veredito (Status)
+	status := "REVIEW"
+	if score > 7.5 {
+		status = "ALLOW"
+	} else if score < 4.5 {
+		status = "BLOCK"
+	}
+
+	resp := VerificationResponse{
+		ArtifactID: artifactID,
+		TrustScore: score,
+		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		Status:     status,
+	}
+
+	// 5. Resposta JSON
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func main() {
+	server := NewServer()
+	
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/verify", server.HandleVerify)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		w.Write([]byte("Spezzatura Lite: Operational"))
 	})
 
-	mux.HandleFunc("/evaluate", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		defer r.Body.Close()
-		var req EvaluateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-
-		// Build core input
-		coreClaims := []core.Claim{}
-		for k, v := range req.Claims {
-			// Expect keys in form namespace.key
-			parts := splitKey(k)
-			if len(parts) != 2 {
-				http.Error(w, "invalid claim key format", http.StatusBadRequest)
-				return
-			}
-			coreClaims = append(coreClaims, core.Claim{Namespace: parts[0], Key: parts[1], Value: v})
-		}
-
-		coreRefs := []core.Reference{}
-		ruleRefs := map[string][]rules.ReferenceRecord{}
-		for k, recs := range req.References {
-			parts := splitKey(k)
-			if len(parts) != 2 {
-				http.Error(w, "invalid reference key format", http.StatusBadRequest)
-				return
-			}
-			for _, rr := range recs {
-				coreRefs = append(coreRefs, core.Reference{
-					Namespace: parts[0],
-					Key:       parts[1],
-					Value:     rr.Value,
-					Source:    rr.Source,
-				})
-				ruleRefs[k] = append(ruleRefs[k], rules.ReferenceRecord{
-					Value:  rr.Value,
-					Source: rr.Source,
-				})
-			}
-		}
-
-		coreIn := core.Input{
-			CorrelationID: req.CorrelationID,
-			AsOfUTC:       req.AsOfUTC,
-			Claims:        coreClaims,
-			References:    coreRefs,
-		}
-
-		ruleIn := rules.Input{
-			Claims:     req.Claims,
-			References: ruleRefs,
-		}
-
-		res, err := service.Evaluate(coreIn, ruleIn)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(EvaluateResponse{Result: res})
-	})
-
-	log.Println("api listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
-}
-
-func splitKey(k string) []string {
-	out := []string{}
-	cur := ""
-	for _, c := range k {
-		if c == '.' {
-			out = append(out, cur)
-			cur = ""
-		} else {
-			cur += string(c)
-		}
+	log.Println("🛡️  Spezzatura TrustScore API listening on :8080")
+	// Configurações de timeout para proteção contra Slowloris attacks
+	srv := &http.Server{
+		Addr:         ":8080",
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
-	out = append(out, cur)
-	return out
+
+	log.Fatal(srv.ListenAndServe())
 }
