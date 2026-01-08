@@ -1,49 +1,36 @@
-package service
+package services
 
 import (
+	"context"
 	"testing"
-	"time"
-
-	"github.com/foundlab/spezzatura-lite/internal/core"
-	"github.com/foundlab/spezzatura-lite/internal/rules"
+	"spezzaturalitev1/internal/rules"
 )
 
-func TestEvaluate_EndToEnd(t *testing.T) {
-	asOf := time.Date(2026, 1, 8, 12, 0, 0, 0, time.UTC)
+func TestOrchestrator_ProcessVerification(t *testing.T) {
+	orch := NewOrchestrator()
+	ctx := context.Background()
 
-	coreIn := core.Input{
-		CorrelationID: "dec_100",
-		AsOfUTC:       asOf,
-		Claims: []core.Claim{
-			{Namespace: "cap_table", Key: "founders_count", Value: "3"},
-			{Namespace: "corp", Key: "cnpj", Value: "40.822.202/0001-33"},
-		},
-		References: []core.Reference{
-			{Namespace: "cap_table", Key: "founders_count", Value: "3", Source: "filing"},
-			{Namespace: "corp", Key: "cnpj", Value: "40.822.202/0001-33", Source: "registry"},
-		},
+	// Dados de entrada simulados
+	input := rules.CapTableInput{
+		DeclaredFounders: 2,
+		DeclaredEquity:   []float64{50.0, 50.0},
 	}
 
-	ruleIn := rules.Input{
-		Claims: map[string]string{
-			"cap_table.founders_count": "3",
-			"corp.cnpj":                "40.822.202/0001-33",
-		},
-		References: map[string][]rules.ReferenceRecord{
-			"cap_table.founders_count": {{Value: "3", Source: "filing"}},
-			"corp.cnpj":                {{Value: "40.822.202/0001-33", Source: "registry"}},
-		},
-	}
+	// Executa o processo
+	score, artifactID, err := orch.ProcessVerification(ctx, input)
 
-	res, err := Evaluate(coreIn, ruleIn)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("O orquestrador falhou: %v", err)
 	}
 
-	if res.Proof.Hash == "" {
-		t.Fatalf("expected proof hash")
+	// Validações
+	if score < 0 || score > 10 {
+		t.Errorf("Score fora dos limites (0-10): %f", score)
 	}
-	if res.CoreResult.TrustScore <= 0 {
-		t.Fatalf("expected positive trust score")
+
+	if artifactID == "" {
+		t.Error("Artefato de verificação não foi gerado")
 	}
+
+	t.Logf("Sucesso: Score %f, Artefato %s", score, artifactID)
 }
