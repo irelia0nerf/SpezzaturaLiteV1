@@ -2,61 +2,56 @@ package services
 
 import (
 	"context"
+	"spezzaturalitev1/internal/artifacts"
 	"spezzaturalitev1/internal/core"
+	"spezzaturalitev1/internal/risk"
 	"spezzaturalitev1/internal/rules"
+	"time"
 )
 
 type Orchestrator struct {
-	engine *core.TrustEngine
+	engine        *core.TrustEngine
+	riskEngine    *risk.ReactiveEngine
+	proofGenerator *artifacts.Generator
 }
 
 func NewOrchestrator() *Orchestrator {
 	return &Orchestrator{
-		engine: core.NewTrustEngine(),
+		engine:        core.NewTrustEngine(),
+		riskEngine:    risk.NewReactiveEngine(),
+		proofGenerator: artifacts.NewGenerator(),
 	}
 }
 
-// ProcessVerification executa o fluxo completo de Due Diligence.
-// Recebe dados brutos, processa e retorna APENAS o score e o artefato.
 func (o *Orchestrator) ProcessVerification(ctx context.Context, capTableData rules.CapTableInput) (float64, string, error) {
-	
-	// --- ZERO-PERSISTENCE PROTOCOL ---
-	// Garante que os dados de entrada sejam limpos da referência ao sair da função.
+	// Zero-Persistence cleanup
 	defer func() {
-		// Em Go, setar para nil ajuda o GC, mas para dados ultra-críticos 
-		// usaríamos bibliotecas de memguard. Para este estágio, nil é suficiente.
-		capTableData.DeclaredEquity = nil 
+		capTableData.DeclaredEquity = nil
 	}()
 
-	// 1. Coleta de Sinais Soberanos (Mock do BigQuery por enquanto)
-	// Na produção, isso chamaria o cliente BigQuery.
+	// 1. Coleta de Sinais Soberanos (Mock do BigQuery)
 	sovereignSignals := rules.SovereignData{
-		DetectedTechnicalContributors: 2, // Ex: Achamos 2 devs ativos
+		DetectedTechnicalContributors: 2,
 		CorporateRegistryFounders:     2,
 	}
 
-	// 2. Execução das Regras (Componente Histórico T^2)
+	// 2. Validação Histórica (Integridade)
 	integrityScore, err := rules.EvaluateCapTableConsistency(ctx, capTableData, sovereignSignals)
 	if err != nil {
 		return 0, "", err
 	}
 
-	// 3. Avaliação de Risco Reativo P(x) (Simulação)
-	// Aqui entraríamos com chamadas de OSINT / Google Search para red flags.
-	// Vamos simular um risco baixo (0.1)
-	currentRisk := 0.1 
+	// 3. Avaliação de Risco Reativo P(x)
+	// Simulando que a startup atualizou dados há 2 dias e sem notícias ruins (0.0)
+	lastUpdate := time.Now().Add(-48 * time.Hour) 
+	currentRisk := o.riskEngine.CalculatePx(lastUpdate, 0.0)
 
-	// 4. Fusão Matemática (Engine)
+	// 4. Fusão Matemática (Engine + Poison Pill)
 	finalTrustScore := o.engine.CalculateTrustScore(integrityScore, currentRisk)
 
-	// 5. Geração de Artefato Imutável
-	// Geramos um Hash SHA-256 do resultado + timestamp (simulado aqui)
-	artifactID := "art_v1_" + generateHash(finalTrustScore)
+	// 5. Geração de Artefato Criptográfico
+	inputFingerprint := artifacts.GenerateInputFingerprint(capTableData.DeclaredFounders, capTableData.DeclaredEquity)
+	artifactID := o.proofGenerator.CreateProof(inputFingerprint, finalTrustScore)
 
 	return finalTrustScore, artifactID, nil
-}
-
-func generateHash(score float64) string {
-	// Implementação simples para exemplo. Usar crypto/sha256 na real.
-	return fmt.Sprintf("%x", score) // Hex representation
 }
